@@ -2,6 +2,20 @@ name: CI
 
 on:
   workflow_dispatch:
+    inputs:
+      leg:
+        description: "baseline (uninstrumented) or instrumented (under chalk/curiosity)"
+        type: choice
+        options: [instrumented, baseline]
+        default: instrumented
+      profile:
+        description: "CrashOverride chalk profile"
+        type: string
+        default: curiosity-tests-racecar
+      racecar_run:
+        description: "racecar correlation token, echoed into the run name"
+        type: string
+        default: ""
   push:
     branches: [main, 'release/**']
   pull_request:
@@ -9,12 +23,21 @@ on:
     types: [opened, synchronize, reopened, labeled]
 
 concurrency:
-  group: ci-${{ github.ref }}
-  cancel-in-progress: true
+  group: ci-${{ github.ref }}-${{ inputs.leg || 'push' }}-${{ inputs.racecar_run }}
+  cancel-in-progress: false
 
 env:
+  # The one variable that separates the arms: on baseline, action-checkout
+  # skips its Set up Chalk step entirely.
+  CHALK_ON: ${{ github.event_name == 'workflow_dispatch' && inputs.leg != 'baseline' }}
   N2_OUTPUT_PROGRESS: "1"
   N2_OUTPUT_SUCCESS: "1"
+
+permissions:
+  contents: read
+  id-token: write
+
+run-name: "CI ${{ inputs.leg || 'push' }} ${{ inputs.racecar_run }}"
 
 jobs:
   # Publish the PR number as a locator. The privileged SonarCloud workflow
@@ -42,10 +65,20 @@ jobs:
   minilints:
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 #v4
+      - name: Checkout code
+        uses: crashappsec/action-checkout@main
         with:
+          chalk: ${{ env.CHALK_ON }}
+          profile: ${{ inputs.profile || 'curiosity-tests-racecar' }}
+          observables_continue_on_error: false
+          lfs: false
           fetch-depth: 0
           filter: blob:none
+      - name: Assert instrumentation is live
+        if: env.CHALK_ON == 'true'
+        run: |
+          test -n "${CURIOSITY_ROOT:-}" || { echo "::error::CURIOSITY_ROOT unset - observables never installed"; exit 1; }
+          test -S "${CURIOSITY_SOCKET_NAME:?socket name unset}" || { echo "::error::co-hostd socket absent"; exit 1; }
 
       - name: Install Rust toolchain
         uses: actions-rust-lang/setup-rust-toolchain@166cdcfd11aee3cb47222f9ddb555ce30ddb9659 #v1
@@ -77,7 +110,18 @@ jobs:
   format:
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 #v4
+      - name: Checkout code
+        uses: crashappsec/action-checkout@main
+        with:
+          chalk: ${{ env.CHALK_ON }}
+          profile: ${{ inputs.profile || 'curiosity-tests-racecar' }}
+          observables_continue_on_error: false
+          lfs: false
+      - name: Assert instrumentation is live
+        if: env.CHALK_ON == 'true'
+        run: |
+          test -n "${CURIOSITY_ROOT:-}" || { echo "::error::CURIOSITY_ROOT unset - observables never installed"; exit 1; }
+          test -S "${CURIOSITY_SOCKET_NAME:?socket name unset}" || { echo "::error::co-hostd socket absent"; exit 1; }
 
       - name: Install Rust toolchain
         uses: actions-rust-lang/setup-rust-toolchain@166cdcfd11aee3cb47222f9ddb555ce30ddb9659 #v1
@@ -106,7 +150,18 @@ jobs:
     runs-on: ubuntu-24.04
     name: check (linux)
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 #v4
+      - name: Checkout code
+        uses: crashappsec/action-checkout@main
+        with:
+          chalk: ${{ env.CHALK_ON }}
+          profile: ${{ inputs.profile || 'curiosity-tests-racecar' }}
+          observables_continue_on_error: false
+          lfs: false
+      - name: Assert instrumentation is live
+        if: env.CHALK_ON == 'true'
+        run: |
+          test -n "${CURIOSITY_ROOT:-}" || { echo "::error::CURIOSITY_ROOT unset - observables never installed"; exit 1; }
+          test -S "${CURIOSITY_SOCKET_NAME:?socket name unset}" || { echo "::error::co-hostd socket absent"; exit 1; }
 
       - name: Restore cargo cache
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 #v6.1.0
@@ -265,7 +320,18 @@ jobs:
     runs-on: ubuntu-24.04-arm
     name: check (linux-arm)
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 #v4
+      - name: Checkout code
+        uses: crashappsec/action-checkout@main
+        with:
+          chalk: ${{ env.CHALK_ON }}
+          profile: ${{ inputs.profile || 'curiosity-tests-racecar' }}
+          observables_continue_on_error: false
+          lfs: false
+      - name: Assert instrumentation is live
+        if: env.CHALK_ON == 'true'
+        run: |
+          test -n "${CURIOSITY_ROOT:-}" || { echo "::error::CURIOSITY_ROOT unset - observables never installed"; exit 1; }
+          test -S "${CURIOSITY_SOCKET_NAME:?socket name unset}" || { echo "::error::co-hostd socket absent"; exit 1; }
 
       - name: Restore cargo cache
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 #v6.1.0
@@ -330,306 +396,10 @@ jobs:
 
   # Intel Mac. Runs on pushes to release branches, manual dispatch, or on PRs
   # with the check:macos label (not on every push to main).
-  check-macos-intel:
-    if: >-
-      (github.event_name == 'push' && startsWith(github.ref, 'refs/heads/release/'))
-      || github.event_name == 'workflow_dispatch'
-      || contains(github.event.pull_request.labels.*.name, 'check:macos')
-    runs-on: macos-15-intel
-    name: check (macos-intel)
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 #v4
-        with:
-          submodules: true
-
-      - name: Restore cargo cache
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 #v6.1.0
-        with:
-          path: |
-            ~/.cargo/registry/index
-            ~/.cargo/registry/cache
-            ~/.cargo/git/db
-            ~/.cargo/bin
-            ~/.cargo/.crates.toml
-            ~/.cargo/.crates2.json
-          key: cargo-intel-macOS-${{ hashFiles('Cargo.lock') }}
-          restore-keys: cargo-intel-macOS-
-
-      - name: Restore build output cache
-        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 #v6.1.0
-        with:
-          path: out
-          key: build-intel-macOS-${{ github.event.pull_request.number || 'main' }}-${{ github.run_id }}
-          restore-keys: |
-            build-intel-macOS-${{ github.event.pull_request.number || 'main' }}-
-            build-intel-macOS-main-
-            build-intel-macOS-
-
-      - name: Setup build environment
-        uses: ./.github/actions/setup-anki
-
-      - name: Install just
-        uses: extractions/setup-just@53165ef7e734c5c07cb06b3c8e7b647c5aa16db3 #v4
-
-      - name: Install cargo-llvm-cov and cargo-nextest
-        uses: taiki-e/install-action@67729d5c413db75907f0ad1e39bb04b9c868ff60 #v2.85.7
-        with:
-          tool: |
-            cargo-llvm-cov@0.8.4
-            cargo-nextest@0.9.99
-
-      - name: Symlink node_modules
-        run: ln -sf out/node_modules .
-
-      - name: Build
-        run: just build
-
-      - name: Lint and test
-        run: |
-          just lint
-          just test
-
-      - name: Clean non-cacheable state
-        if: always()
-        shell: bash
-        run: |
-          rm -rf out/pyenv
-          rm -f out/build.ninja
-
-      - name: Save build output cache
-        if: always()
-        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 #v6.1.0
-        with:
-          path: out
-          key: build-intel-macOS-${{ github.event.pull_request.number || 'main' }}-${{ github.run_id }}
 
   # Runs on pushes to main or on PRs with the check:macos label.
-  check-macos:
-    if: >-
-      github.event_name == 'push'
-      || github.event_name == 'workflow_dispatch'
-      || contains(github.event.pull_request.labels.*.name, 'check:macos')
-    runs-on: macos-latest
-    name: check (macos)
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 #v4
-        with:
-          submodules: true
-
-      - name: Restore cargo cache
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 #v6.1.0
-        with:
-          path: |
-            ~/.cargo/registry/index
-            ~/.cargo/registry/cache
-            ~/.cargo/git/db
-            ~/.cargo/bin
-            ~/.cargo/.crates.toml
-            ~/.cargo/.crates2.json
-          key: cargo-macOS-${{ hashFiles('Cargo.lock') }}
-          restore-keys: cargo-macOS-
-
-      - name: Restore build output cache
-        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 #v6.1.0
-        with:
-          path: out
-          key: build-macOS-${{ github.event.pull_request.number || 'main' }}-${{ github.run_id }}
-          restore-keys: |
-            build-macOS-${{ github.event.pull_request.number || 'main' }}-
-            build-macOS-main-
-            build-macOS-
-
-      - name: Setup build environment
-        uses: ./.github/actions/setup-anki
-
-      - name: Install just
-        uses: extractions/setup-just@53165ef7e734c5c07cb06b3c8e7b647c5aa16db3 #v4
-
-      - name: Install cargo-llvm-cov and cargo-nextest
-        uses: taiki-e/install-action@67729d5c413db75907f0ad1e39bb04b9c868ff60 #v2.85.7
-        with:
-          tool: |
-            cargo-llvm-cov@0.8.4
-            cargo-nextest@0.9.99
-
-      - name: Symlink node_modules
-        run: ln -sf out/node_modules .
-
-      - name: Build
-        run: just build
-
-      - name: Lint and test
-        run: |
-          just lint
-          just test
-
-      - name: Clean non-cacheable state
-        if: always()
-        shell: bash
-        run: |
-          rm -rf out/pyenv
-          rm -f out/build.ninja
-
-      - name: Save build output cache
-        if: always()
-        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 #v6.1.0
-        with:
-          path: out
-          key: build-macOS-${{ github.event.pull_request.number || 'main' }}-${{ github.run_id }}
 
   # Runs on pushes to main or on PRs with the check:windows label.
-  check-windows:
-    if: >-
-      github.event_name == 'push'
-      || github.event_name == 'workflow_dispatch'
-      || contains(github.event.pull_request.labels.*.name, 'check:windows')
-    runs-on: windows-latest
-    name: check (windows)
-    # Colocate CARGO_HOME and TEMP on D: to keep all I/O on the same fast
-    # local disk.
-    env:
-      CARGO_HOME: D:\cargo-home
-      TEMP: D:\tmp
-      TMP: D:\tmp
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 #v4
-        with:
-          submodules: true
-
-      - name: Prepare D:\ directories
-        shell: bash
-        run: mkdir -p /d/cargo-home /d/tmp
-
-      - name: Restore cargo cache
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 #v6.1.0
-        with:
-          path: |
-            D:\cargo-home\registry\index
-            D:\cargo-home\registry\cache
-            D:\cargo-home\git\db
-            D:\cargo-home\bin
-            D:\cargo-home\.crates.toml
-            D:\cargo-home\.crates2.json
-          key: cargo-Windows-${{ hashFiles('Cargo.lock') }}
-          restore-keys: cargo-Windows-
-
-      - name: Restore build output cache
-        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 #v6.1.0
-        with:
-          path: out
-          key: build-Windows-${{ github.event.pull_request.number || 'main' }}-${{ github.run_id }}
-          restore-keys: |
-            build-Windows-${{ github.event.pull_request.number || 'main' }}-
-            build-Windows-main-
-            build-Windows-
-
-      - name: Setup build environment
-        uses: ./.github/actions/setup-anki
-
-      - name: Install just
-        uses: extractions/setup-just@53165ef7e734c5c07cb06b3c8e7b647c5aa16db3 #v4
-
-      - name: Install cargo-llvm-cov and cargo-nextest
-        uses: taiki-e/install-action@67729d5c413db75907f0ad1e39bb04b9c868ff60 #v2.85.7
-        with:
-          tool: |
-            cargo-llvm-cov@0.8.4
-            cargo-nextest@0.9.99
-
-      - name: Build
-        run: just build
-
-      - name: Lint and test
-        run: |
-          just lint
-          just test
-
-      # Also remove node_modules on Windows — file-locking corrupts the cache.
-      - name: Clean non-cacheable state
-        if: always()
-        shell: bash
-        run: |
-          rm -rf out/pyenv out/node_modules
-          rm -f out/build.ninja
-
-      - name: Save build output cache
-        if: always()
-        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 #v6.1.0
-        with:
-          path: out
-          key: build-Windows-${{ github.event.pull_request.number || 'main' }}-${{ github.run_id }}
 
   # ARM Windows. Runs on pushes to release branches, manual dispatch, or on
   # PRs with the check:windows label (not on every push to main).
-  check-windows-arm:
-    if: >-
-      (github.event_name == 'push' && startsWith(github.ref, 'refs/heads/release/'))
-      || github.event_name == 'workflow_dispatch'
-      || contains(github.event.pull_request.labels.*.name, 'check:windows')
-    runs-on: windows-11-arm
-    name: check (windows-arm)
-    # Unlike the x64 Windows runner, windows-11-arm has no D: drive, so we use
-    # the default C:-based CARGO_HOME and TEMP.
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 #v4
-        with:
-          submodules: true
-
-      - name: Restore cargo cache
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 #v6.1.0
-        with:
-          path: |
-            ~/.cargo/registry/index
-            ~/.cargo/registry/cache
-            ~/.cargo/git/db
-            ~/.cargo/bin
-            ~/.cargo/.crates.toml
-            ~/.cargo/.crates2.json
-          key: cargo-arm64-Windows-${{ hashFiles('Cargo.lock') }}
-          restore-keys: cargo-arm64-Windows-
-
-      - name: Restore build output cache
-        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 #v6.1.0
-        with:
-          path: out
-          key: build-arm64-Windows-${{ github.event.pull_request.number || 'main' }}-${{ github.run_id }}
-          restore-keys: |
-            build-arm64-Windows-${{ github.event.pull_request.number || 'main' }}-
-            build-arm64-Windows-main-
-            build-arm64-Windows-
-
-      - name: Setup build environment
-        uses: ./.github/actions/setup-anki
-
-      - name: Install just
-        uses: extractions/setup-just@53165ef7e734c5c07cb06b3c8e7b647c5aa16db3 #v4
-
-      - name: Install cargo-llvm-cov and cargo-nextest
-        uses: taiki-e/install-action@67729d5c413db75907f0ad1e39bb04b9c868ff60 #v2.85.7
-        with:
-          tool: |
-            cargo-llvm-cov@0.8.4
-            cargo-nextest@0.9.99
-
-      - name: Build
-        run: just build
-
-      - name: Lint and test
-        run: |
-          just lint
-          just test
-
-      # Also remove node_modules on Windows — file-locking corrupts the cache.
-      - name: Clean non-cacheable state
-        if: always()
-        shell: bash
-        run: |
-          rm -rf out/pyenv out/node_modules
-          rm -f out/build.ninja
-
-      - name: Save build output cache
-        if: always()
-        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 #v6.1.0
-        with:
-          path: out
-          key: build-arm64-Windows-${{ github.event.pull_request.number || 'main' }}-${{ github.run_id }}
