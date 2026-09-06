@@ -29,7 +29,7 @@ concurrency:
 env:
   # The one variable that separates the arms: on baseline, action-checkout
   # skips its Set up Chalk step entirely.
-  CHALK_ON: ${{ github.event_name == 'workflow_dispatch' && inputs.leg != 'baseline' }}
+  CHALK_ON: ${{ inputs.leg == 'instrumented' }}
   N2_OUTPUT_PROGRESS: "1"
   N2_OUTPUT_SUCCESS: "1"
 
@@ -43,7 +43,7 @@ jobs:
   # Publish the PR number as a locator. The privileged SonarCloud workflow
   # verifies it against the GitHub API before treating it as trusted metadata.
   sonar-context:
-    if: github.event_name == 'pull_request'
+    if: ${{ 'push' == 'pull_request' }}
     runs-on: ubuntu-24.04
     steps:
       - name: Save PR number for SonarCloud
@@ -204,7 +204,7 @@ jobs:
         run: ln -sf out/node_modules .
 
       - name: Restore coverage baseline
-        if: github.event_name == 'pull_request'
+        if: ${{ 'push' == 'pull_request' }}
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 #v6.1.0
         with:
           path: out/coverage
@@ -212,7 +212,7 @@ jobs:
           restore-keys: coverage-baseline-linux-
 
       - name: Move restored baseline aside
-        if: github.event_name == 'pull_request'
+        if: ${{ 'push' == 'pull_request' }}
         run: test -d out/coverage && mv out/coverage out/coverage-baseline || true
 
       - name: Build
@@ -247,7 +247,7 @@ jobs:
           key: coverage-baseline-linux-${{ github.sha }}
 
       - name: Check coverage regression
-        if: github.event_name == 'pull_request'
+        if: ${{ 'push' == 'pull_request' }}
         run: python3 tools/coverage/check-coverage-regression.py out/coverage-baseline out/coverage
 
       - name: Run e2e tests
@@ -267,7 +267,7 @@ jobs:
         run: ./run
 
       - name: Check Rust dependencies
-        if: github.event_name == 'pull_request'
+        if: ${{ 'push' == 'pull_request' }}
         id: rust-deps
         uses: tj-actions/changed-files@9426d40962ed5378910ee2e21d5f8c6fcbf2dd96 #v47.0.6
         with:
@@ -277,12 +277,12 @@ jobs:
             .deny.toml
 
       - name: Run cargo-deny check
-        if: github.event_name != 'pull_request' || steps.rust-deps.outputs.any_changed == 'true'
+        if: ${{ 'push' != 'pull_request' || steps.rust-deps.outputs.any_changed == 'true' }}
         shell: bash
         run: cargo deny check
 
       - name: Upload coverage for SonarCloud
-        if: github.event_name == 'push' || github.event_name == 'pull_request'
+        if: ${{ 'push' == 'push' || 'push' == 'pull_request' }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a #v7.0.1
         with:
           name: coverage-reports
@@ -314,8 +314,8 @@ jobs:
   # with the check:linux label (not on every push to main).
   check-linux-arm:
     if: >-
-      (github.event_name == 'push' && startsWith(github.ref, 'refs/heads/release/'))
-      || github.event_name == 'workflow_dispatch'
+      ('push' == 'push' && startsWith(github.ref, 'refs/heads/release/'))
+      || 'push' == 'workflow_dispatch'
       || contains(github.event.pull_request.labels.*.name, 'check:linux')
     runs-on: ubuntu-24.04-arm
     name: check (linux-arm)
