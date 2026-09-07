@@ -103,7 +103,13 @@ jobs:
         if: steps.non-doc-changes.outputs.any_changed == 'true'
         run: cargo run -p minilints -- check /tmp/minilints.stamp
         env:
-          CONTRIBUTORS_BYPASS_EMAILS: ${{ vars.CONTRIBUTORS_BYPASS_EMAILS }}
+          # minilints' check_contributors() rejects any HEAD whose author email has
+          # never committed to CONTRIBUTORS, and the racecar patch commits are
+          # authored by us, not by an upstream contributor. Upstream's own escape
+          # hatch (tools/minilints/src/main.rs, CONTRIBUTORS_BYPASS_EMAILS) is
+          # backed by a repo variable that only exists on ankitects/anki, so fall
+          # back to the two identities that author our patches.
+          CONTRIBUTORS_BYPASS_EMAILS: ${{ vars.CONTRIBUTORS_BYPASS_EMAILS || 'theofilos@crashoverride.com,noreply@anthropic.com' }}
 
   # Lightweight formatting checks (no build outputs needed).
   # Uses individual tool installs instead of setup-anki to stay fast.
