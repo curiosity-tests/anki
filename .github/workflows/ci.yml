@@ -321,7 +321,7 @@ jobs:
   check-linux-arm:
     if: >-
       ('push' == 'push' && startsWith(github.ref, 'refs/heads/release/'))
-      || 'push' == 'workflow_dispatch'
+      || github.event_name == 'workflow_dispatch'
       || contains(github.event.pull_request.labels.*.name, 'check:linux')
     runs-on: ubuntu-24.04-arm
     name: check (linux-arm)
